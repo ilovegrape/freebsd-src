@@ -26,8 +26,10 @@
  */
 
 #include <sys/param.h>
+#include <sys/capsicum.h>
 #include <sys/extattr.h>
 #include <sys/fcntl.h>
+#include <sys/file.h>
 #include <sys/namei.h>
 #include <sys/proc.h>
 #include <sys/syscallsubr.h>
@@ -84,6 +86,19 @@ struct removexattr_args {
 	int		follow;
 };
 
+static int
+linux_xattr_check_fd(struct thread *td, int fd, cap_rights_t *rights)
+{
+	struct file *fp;
+	int error;
+
+	error = getvnode(td, fd, rights, &fp);
+	if (error != 0)
+		return (error);
+	fdrop(fp, td);
+	return (0);
+}
+
 static char *extattr_namespace_names[] = EXTATTR_NAMESPACE_NAMES;
 
 
@@ -132,11 +147,19 @@ listxattr(struct thread *td, struct listxattr_args *args)
 {
 	char attrname[LINUX_XATTR_NAME_MAX + 1];
 	char *data, *prefix, *key;
+	cap_rights_t rights;
 	struct uio auio;
 	struct iovec aiov;
 	unsigned char keylen;
 	size_t sz, cnt, rs, prefixlen, pairlen;
 	int attrnamespace, error;
+
+	if (args->path == NULL) {
+		error = linux_xattr_check_fd(td, args->fd,
+		    cap_rights_init_one(&rights, CAP_EXTATTR_LIST));
+		if (error != 0)
+			return (error);
+	}
 
 	if (args->size != 0)
 		sz = min(LINUX_XATTR_LIST_MAX, args->size);
@@ -253,7 +276,15 @@ static int
 removexattr(struct thread *td, struct removexattr_args *args)
 {
 	char attrname[LINUX_XATTR_NAME_MAX + 1];
+	cap_rights_t rights;
 	int attrnamespace, error;
+
+	if (args->path == NULL) {
+		error = linux_xattr_check_fd(td, args->fd,
+		    cap_rights_init_one(&rights, CAP_EXTATTR_DELETE));
+		if (error != 0)
+			return (error);
+	}
 
 	error = xattr_to_extattr(args->name, &attrnamespace, attrname);
 	if (error != 0)
@@ -310,7 +341,15 @@ static int
 getxattr(struct thread *td, struct getxattr_args *args)
 {
 	char attrname[LINUX_XATTR_NAME_MAX + 1];
+	cap_rights_t rights;
 	int attrnamespace, error;
+
+	if (args->path == NULL) {
+		error = linux_xattr_check_fd(td, args->fd,
+		    cap_rights_init_one(&rights, CAP_EXTATTR_GET));
+		if (error != 0)
+			return (error);
+	}
 
 	error = xattr_to_extattr(args->name, &attrnamespace, attrname);
 	if (error != 0)
@@ -373,7 +412,15 @@ static int
 setxattr(struct thread *td, struct setxattr_args *args)
 {
 	char attrname[LINUX_XATTR_NAME_MAX + 1];
+	cap_rights_t rights;
 	int attrnamespace, error;
+
+	if (args->path == NULL) {
+		error = linux_xattr_check_fd(td, args->fd,
+		    cap_rights_init_one(&rights, CAP_EXTATTR_SET));
+		if (error != 0)
+			return (error);
+	}
 
 	if ((args->flags & ~(LINUX_XATTR_FLAGS)) != 0 ||
 	    args->flags == (LINUX_XATTR_FLAGS))
